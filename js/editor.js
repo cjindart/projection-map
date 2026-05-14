@@ -488,10 +488,13 @@ function removeSurface(id) {
 }
 
 function selectSurface(id) {
+  const alreadySelected = state.selectedId === id && state.selectedIds.size === (id ? 1 : 0);
   state.selectedId = id;
   state.selectedIds = id ? new Set([id]) : new Set();
-  renderLayers();
-  renderProperties();
+  if (!alreadySelected) {
+    renderLayers();
+    renderProperties();
+  }
   const s = id ? state.surfaces.find(s => s.id === id) : null;
   document.getElementById('status-surface').textContent = s ? `Selected: ${s.name}` : '';
 }
@@ -617,6 +620,35 @@ function selectSurfaces(ids) {
 function bindLayerPanel() {
   document.getElementById('btn-add-surface').addEventListener('click', addSurface);
   document.getElementById('btn-add-surface-2').addEventListener('click', addSurface);
+
+  // Delegated dblclick — use elementFromPoint because click handlers rebuild the DOM
+  // before dblclick fires, making e.target point to a detached element
+  document.getElementById('layers-list').addEventListener('dblclick', (e) => {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const nameSpan = el?.closest('.layer-name');
+    if (!nameSpan) return;
+    e.stopPropagation();
+    const item = nameSpan.closest('[data-surface-id]');
+    if (!item) return;
+    const s = state.surfaces.find(s => s.id === +item.dataset.surfaceId);
+    if (!s) return;
+    const input = document.createElement('input');
+    input.className = 'layer-rename-input';
+    input.value = s.name;
+    nameSpan.replaceWith(input);
+    input.focus(); input.select();
+    const commit = () => {
+      s.name = input.value.trim() || s.name;
+      renderLayers();
+      renderProperties();
+      broadcastState();
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+      if (ev.key === 'Escape') { input.value = s.name; input.blur(); }
+    });
+  });
 }
 
 function renderLayers() {
@@ -628,6 +660,7 @@ function renderLayers() {
     const s = state.surfaces[i];
     const item = document.createElement('div');
     item.className = 'layer-item' + (state.selectedIds.has(s.id) ? ' selected' : '') + (!s.enabled ? ' disabled' : '');
+    item.dataset.surfaceId = s.id;
     item.innerHTML = `
       <span class="layer-vis" title="Toggle visibility">${s.enabled ? '👁' : '○'}</span>
       <span class="layer-type">${typeIcons[s.content.type] ?? '■'}</span>
@@ -643,26 +676,6 @@ function renderLayers() {
     item.querySelector('.layer-delete').addEventListener('click', (e) => {
       e.stopPropagation();
       removeSurface(s.id);
-    });
-    item.querySelector('.layer-name').addEventListener('dblclick', (e) => {
-      e.stopPropagation();
-      const span = e.target;
-      const input = document.createElement('input');
-      input.className = 'layer-rename-input';
-      input.value = s.name;
-      span.replaceWith(input);
-      input.focus(); input.select();
-      const commit = () => {
-        s.name = input.value.trim() || s.name;
-        renderLayers();
-        renderProperties();
-        broadcastState();
-      };
-      input.addEventListener('blur', commit);
-      input.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
-        if (ev.key === 'Escape') { input.value = s.name; input.blur(); }
-      });
     });
     item.addEventListener('click', () => selectSurface(s.id));
     list.appendChild(item);
