@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>proj-map — Editor</title>
+  <link rel="stylesheet" href="css/editor.css">
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar">
+      <span class="logo">proj-map</span>
+      <div class="toolbar-actions">
+        <button id="btn-output" class="btn-primary">⬛ Open Output</button>
+        <button id="btn-add-surface" class="btn-secondary">+ Add Surface</button>
+        <span class="sep"></span>
+        <button id="btn-save" class="btn-secondary">Save</button>
+        <button id="btn-load" class="btn-secondary">Load</button>
+        <input type="file" id="file-input" accept=".json" style="display:none">
+        <span class="sep"></span>
+        <label class="toggle-label">
+          <input type="checkbox" id="toggle-grid"> Grid
+        </label>
+        <label class="toggle-label">
+          <input type="checkbox" id="toggle-snap"> Snap
+        </label>
+      </div>
+    </header>
+
+    <main id="workspace">
+      <aside id="layers-panel">
+        <div class="panel-header">Surfaces</div>
+        <div id="layers-list"></div>
+        <div class="panel-footer">
+          <button id="btn-add-surface-2" class="btn-full">+ Add Surface</button>
+        </div>
+      </aside>
+
+      <section id="canvas-area">
+        <div id="canvas-wrapper">
+          <canvas id="preview-gl"></canvas>
+          <canvas id="preview-overlay"></canvas>
+        </div>
+        <div id="status-bar">
+          <span id="status-pos">x: 0.000  y: 0.000</span>
+          <span id="status-surface"></span>
+          <span id="status-hint">Click a surface to select · Drag corners to warp</span>
+        </div>
+      </section>
+
+      <aside id="properties-panel">
+        <div class="panel-header">Properties</div>
+        <div id="properties-content">
+          <div class="empty-state">Select a surface to edit its properties</div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script type="module" src="js/editor.js"></script>
+</body>
+</html>
