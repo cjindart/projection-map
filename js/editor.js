@@ -9,6 +9,8 @@ import { idbSet, idbGet } from './idb.js';
 let state = {
   surfaces: [],
   nextId: 1,
+  globalGroups: [],
+  nextGroupId: 1,
   selectedId: null,
   selectedIds: new Set(),
   output: { width: 1920, height: 1080, background: '#000000' },
@@ -26,6 +28,21 @@ const startEpoch = Date.now(); // absolute epoch shared with output
 let clipboard = null; // copied surface data
 const undoStack = [];
 const MAX_UNDO = 50;
+
+let isDirty = false;
+
+function markDirty() {
+  if (isDirty) return;
+  isDirty = true;
+  const btn = document.getElementById('btn-save');
+  if (btn) btn.textContent = 'Save ●';
+}
+
+function markClean() {
+  isDirty = false;
+  const btn = document.getElementById('btn-save');
+  if (btn) btn.textContent = 'Save';
+}
 
 // Drag state
 let drag = null;
@@ -54,17 +71,25 @@ async function init() {
   bindToolbar();
   bindLayerPanel();
 
-  // Restore autosave, or start with a default surface
-  const restored = await loadAutosave();
-  if (!restored) addSurface();
-  else { renderLayers(); renderProperties(); }
+  // Always start with a clean slate — no session restore
+  addSurface();
 
   // Listen for output pings (output requesting state)
   channel.on((msg) => {
     if (msg.type === 'request-state') broadcastState();
   });
 
+  window.addEventListener('beforeunload', (e) => {
+    if (isDirty) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
   loop();
+
+  // Initial surface isn't a user change — start clean
+  markClean();
 }
 
 function setupCanvasSize(glCanvas, overlay) {
@@ -97,7 +122,10 @@ function loop() {
   // Upload textures for all surfaces
   for (const surface of state.surfaces) {
     if (!surface.enabled) continue;
-    const contentCanvas = renderContent(surface, t, state.output.width, state.output.height);
+    const group = surface.globalGroupId != null
+      ? state.globalGroups.find(g => g.id === surface.globalGroupId) ?? null
+      : null;
+    const contentCanvas = renderContent(surface, t, state.output.width, state.output.height, group);
     glRenderer.uploadTexture(surface.id, contentCanvas);
   }
 
@@ -192,10 +220,10 @@ function drawGrid(ctx, W, H) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
   // Center cross
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(W/2, 0); ctx.lineTo(W/2, H); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke();
+  // ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  // ctx.lineWidth = 1;
+  // ctx.beginPath(); ctx.moveTo(W/2, 0); ctx.lineTo(W/2, H); ctx.stroke();
+  // ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke();
 }
 
 // ── Canvas Interaction ────────────────────────────────────────────────────────
@@ -267,6 +295,7 @@ function snapToGrid(v) {
   const gridSize = 1 / 16;
   return Math.round(v / gridSize) * gridSize;
 }
+
 
 // Snap a dragged corner (nx, ny in 0-1 space) to the nearest corner on any
 // other surface if within CORNER_SNAP_DIST pixels. Returns {x, y} (normalised).
@@ -464,7 +493,7 @@ function addSurface() {
       { x: 0.85 - offset, y: 0.85 - offset },
       { x: 0.15 + offset, y: 0.85 - offset },
     ],
-    content: { type: 'effect', effect: 'grid', params: { cols: 8, rows: 8, lineWidth: 2, opacity: 1 } },
+    content: { type: 'effect', effect: 'grid', params: { cols: 8, rows: 8, lineWidth: 3, opacity: 1 } },
     opacity: 1.0,
     blendMode: 'normal',
   };
@@ -482,6 +511,7 @@ function removeSurface(id) {
   pushHistory();
   glRenderer.deleteTexture(id);
   state.surfaces = state.surfaces.filter(s => s.id !== id);
+  cleanEmptyGroups();
   if (state.selectedId === id) selectSurface(state.surfaces.length ? state.surfaces[state.surfaces.length - 1].id : null);
   renderLayers();
   broadcastState();
@@ -506,9 +536,7 @@ function broadcastState() {
   const serializable = serializeState(true);
   serializable._epoch = startEpoch;
   channel.send('state-update', serializable);
-  // Debounced autosave — include full state (with video src) for reload portability
-  clearTimeout(broadcastState._saveTimer);
-  broadcastState._saveTimer = setTimeout(() => autosave(serializeState(false)), 300);
+  markDirty();
 }
 
 function autosave(data) {
@@ -523,6 +551,8 @@ async function loadAutosave() {
     state.output = saved.output ?? state.output;
     state.projectName = saved.projectName ?? null;
     state.nextId = saved.nextId ?? (Math.max(0, ...state.surfaces.map(s => s.id)) + 1);
+    state.globalGroups = saved.globalGroups ?? [];
+    state.nextGroupId = saved.nextGroupId ?? (state.globalGroups.length ? Math.max(...state.globalGroups.map(g => g.id)) + 1 : 1);
     for (const s of state.surfaces) {
       if (s.content.type === 'video') {
         await restoreVideo(s.content);
@@ -561,6 +591,8 @@ function serializeState(stripVideo = false) {
     })),
     output: state.output,
     projectName: state.projectName,
+    globalGroups: state.globalGroups,
+    nextGroupId: state.nextGroupId,
   };
 }
 
@@ -935,21 +967,58 @@ function renderContentSettings(s) {
       el.querySelector('#p-text-bold').addEventListener('change', (e) => { c.bold = e.target.checked; broadcastState(); });
       break;
 
-    case 'effect':
+    case 'effect': {
+      const group = s.globalGroupId != null ? state.globalGroups.find(g => g.id === s.globalGroupId) : null;
+      const src = group ?? c; // where effect+params live (group or surface's own content)
+      const memberCount = group ? countGroupMembers(group.id) : 0;
       el.innerHTML = `
+        <div class="prop-row">
+          <label>Global Group</label>
+          <select id="p-group-select">
+            <option value="">None</option>
+            ${state.globalGroups.map(g => {
+              const n = countGroupMembers(g.id);
+              return `<option value="${g.id}" ${s.globalGroupId === g.id ? 'selected' : ''}>${escHtml(g.name)} (${n})</option>`;
+            }).join('')}
+            <option value="__new__">+ New group…</option>
+          </select>
+        </div>
+        ${group ? `<div class="prop-row"><label></label><span style="font-size:11px;color:#888">Synced across ${memberCount} surface(s)</span></div>` : ''}
         <div class="prop-row"><label>Effect</label>
           <select id="p-effect-type">
-            ${EFFECT_KEYS.map(k => `<option value="${k}" ${c.effect===k?'selected':''}>${EFFECTS[k].label}</option>`).join('')}
+            ${EFFECT_KEYS.map(k => `<option value="${k}" ${src.effect===k?'selected':''}>${EFFECTS[k].label}</option>`).join('')}
           </select>
         </div>
         <div class="effect-params" id="p-effect-params"></div>
       `;
-      renderEffectParams(s);
+      el.querySelector('#p-group-select').addEventListener('change', (e) => {
+        const val = e.target.value;
+        if (val === '__new__') {
+          const name = prompt('Group name:', `Group ${state.nextGroupId}`);
+          if (!name) { e.target.value = s.globalGroupId != null ? String(s.globalGroupId) : ''; return; }
+          const newGroup = { id: state.nextGroupId++, name: name.trim(), effect: c.effect ?? 'plasma', params: { ...(c.params ?? {}) } };
+          state.globalGroups.push(newGroup);
+          s.globalGroupId = newGroup.id;
+        } else if (val === '') {
+          if (s.globalGroupId != null) {
+            const g = state.globalGroups.find(g => g.id === s.globalGroupId);
+            if (g) { c.effect = g.effect; c.params = { ...g.params }; }
+          }
+          s.globalGroupId = null;
+          cleanEmptyGroups();
+        } else {
+          s.globalGroupId = +val;
+        }
+        renderProperties(); broadcastState();
+      });
       el.querySelector('#p-effect-type').addEventListener('change', (e) => {
-        c.effect = e.target.value; c.params = {};
+        src.effect = e.target.value;
+        src.params = {};
         renderEffectParams(s); broadcastState();
       });
+      renderEffectParams(s);
       break;
+    }
   }
 }
 
@@ -976,27 +1045,36 @@ function renderGradientStops(s) {
   });
 }
 
+function countGroupMembers(groupId) {
+  return state.surfaces.filter(s => s.globalGroupId === groupId).length;
+}
+
+function cleanEmptyGroups() {
+  state.globalGroups = state.globalGroups.filter(g => state.surfaces.some(s => s.globalGroupId === g.id));
+}
+
 function renderEffectParams(s) {
-  const c = s.content;
-  const effect = EFFECTS[c.effect];
+  const group = s.globalGroupId != null ? state.globalGroups.find(g => g.id === s.globalGroupId) : null;
+  const src = group ?? s.content; // read/write params here
+  const effect = EFFECTS[src.effect];
   if (!effect) return;
   const el = document.getElementById('p-effect-params');
   if (!el) return;
   el.innerHTML = '';
-  c.params = c.params ?? {};
+  src.params = src.params ?? {};
   for (const [key, def] of Object.entries(effect.params)) {
-    const val = c.params[key] ?? def.default;
+    if (key === 'global' && group) continue; // group mode always uses global coords — hide the toggle
+    const val = src.params[key] ?? def.default;
     const row = document.createElement('div');
     row.className = 'prop-row';
     if (def.min === 0 && def.max === 1 && def.step === 1) {
-      // Boolean toggle
       row.innerHTML = `<label>${def.label}</label><input type="checkbox" id="ep-${key}" ${val>0.5?'checked':''}>`;
-      row.querySelector('input').addEventListener('change', (e) => { c.params[key] = e.target.checked ? 1 : 0; broadcastState(); });
+      row.querySelector('input').addEventListener('change', (e) => { src.params[key] = e.target.checked ? 1 : 0; broadcastState(); });
     } else {
       row.innerHTML = `<label>${def.label}</label><input type="range" id="ep-${key}" min="${def.min}" max="${def.max}" step="${def.step}" value="${val}"><span id="ep-${key}-val">${val}</span>`;
       row.querySelector('input').addEventListener('input', (e) => {
-        c.params[key] = parseFloat(e.target.value);
-        document.getElementById(`ep-${key}-val`).textContent = c.params[key];
+        src.params[key] = parseFloat(e.target.value);
+        document.getElementById(`ep-${key}-val`).textContent = src.params[key];
         broadcastState();
       });
     }
@@ -1146,6 +1224,7 @@ async function saveProject() {
   const a = document.createElement('a');
   a.href = url; a.download = state.projectName + '.json';
   a.click(); URL.revokeObjectURL(url);
+  markClean();
 }
 
 function loadProject(e) {
@@ -1159,6 +1238,8 @@ function loadProject(e) {
       state.output = loaded.output ?? state.output;
       state.projectName = loaded.projectName ?? null;
       state.nextId = Math.max(...state.surfaces.map(s => s.id), 0) + 1;
+      state.globalGroups = loaded.globalGroups ?? [];
+      state.nextGroupId = loaded.nextGroupId ?? (state.globalGroups.length ? Math.max(...state.globalGroups.map(g => g.id)) + 1 : 1);
       state.selectedId = null;
       state.selectedIds = new Set();
       for (const s of state.surfaces) {

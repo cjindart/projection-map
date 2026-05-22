@@ -5,7 +5,7 @@ import { idbGet } from './idb.js';
 
 let glRenderer = null;
 let channel = null;
-let state = { surfaces: [], output: { width: 1920, height: 1080, background: '#000000' } };
+let state = { surfaces: [], globalGroups: [], output: { width: 1920, height: 1080, background: '#000000' } };
 let epoch = Date.now();
 
 function init() {
@@ -126,7 +126,10 @@ function loop() {
   const t = (Date.now() - epoch) / 1000;
   for (const surface of state.surfaces) {
     if (!surface.enabled) continue;
-    glRenderer.uploadTexture(surface.id, renderContent(surface, t, state.output?.width ?? 1920, state.output?.height ?? 1080));
+    const group = surface.globalGroupId != null
+      ? (state.globalGroups ?? []).find(g => g.id === surface.globalGroupId) ?? null
+      : null;
+    glRenderer.uploadTexture(surface.id, renderContent(surface, t, state.output?.width ?? 1920, state.output?.height ?? 1080, group));
   }
   glRenderer.render(state, state.output?.background ?? '#000000');
   requestAnimationFrame(loop);

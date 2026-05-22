@@ -5,22 +5,35 @@ import { hslToRgb } from './math.js';
 export const EFFECTS = {
   plasma: {
     label: 'Plasma',
-    params: { speed: { label: 'Speed', min: 0.1, max: 5, step: 0.1, default: 1 }, scale: { label: 'Scale', min: 1, max: 20, step: 0.5, default: 6 } },
-    render(ctx, w, h, params, t) {
+    params: { speed: { label: 'Speed', min: 0.1, max: 5, step: 0.1, default: 1 }, scale: { label: 'Scale', min: 1, max: 20, step: 0.5, default: 6 }, global: { label: 'Global', min: 0, max: 1, step: 1, default: 0 } },
+    render(ctx, w, h, params, t, surfaceId, corners) {
       const res = 128;
       const img = ctx.createImageData(res, res);
       const d = img.data;
-      const sc = (params.scale ?? 6) / res;
+      const isGlobal = (params.global ?? 0) > 0.5;
+      const GS = 512; // global coordinate space size
+      const sc = (params.scale ?? 6) / (isGlobal ? GS : res);
       const sp = params.speed ?? 1;
-      for (let y = 0; y < res; y++) {
-        for (let x = 0; x < res; x++) {
-          const v = Math.sin(x * sc + t * sp)
+      const cx = isGlobal ? GS / 2 : res / 2;
+      const cy = isGlobal ? GS / 2 : res / 2;
+      for (let py = 0; py < res; py++) {
+        for (let px = 0; px < res; px++) {
+          let x, y;
+          if (isGlobal && corners) {
+            // Map local canvas pixel to output-space via bilinear interpolation across the quad
+            const u = px / res, v = py / res;
+            x = (corners[0].x*(1-u)*(1-v) + corners[1].x*u*(1-v) + corners[3].x*(1-u)*v + corners[2].x*u*v) * GS;
+            y = (corners[0].y*(1-u)*(1-v) + corners[1].y*u*(1-v) + corners[3].y*(1-u)*v + corners[2].y*u*v) * GS;
+          } else {
+            x = px; y = py;
+          }
+          const val = Math.sin(x * sc + t * sp)
             + Math.sin(y * sc + t * sp * 0.7)
             + Math.sin((x + y) * sc * 0.7 + t * sp * 1.3)
-            + Math.sin(Math.sqrt(((x - res/2)**2 + (y - res/2)**2)) * sc + t * sp);
-          const h = ((v * 90 + t * 40 * sp) % 360 + 360) % 360;
-          const [r, g, b] = hslToRgb(h / 360, 0.9, 0.45 + v * 0.12);
-          const i = (y * res + x) * 4;
+            + Math.sin(Math.sqrt(((x - cx)**2 + (y - cy)**2)) * sc + t * sp);
+          const hue = ((val * 90 + t * 40 * sp) % 360 + 360) % 360;
+          const [r, g, b] = hslToRgb(hue / 360, 0.9, 0.45 + val * 0.12);
+          const i = (py * res + px) * 4;
           d[i] = r * 255; d[i+1] = g * 255; d[i+2] = b * 255; d[i+3] = 255;
         }
       }
@@ -174,23 +187,33 @@ export const EFFECTS = {
 
   noise: {
     label: 'Noise',
-    params: { speed: { label: 'Speed', min: 0.1, max: 5, step: 0.1, default: 0.8 }, scale: { label: 'Scale', min: 1, max: 20, step: 0.5, default: 8 }, hue: { label: 'Hue', min: 0, max: 360, step: 1, default: 0 }, rainbow: { label: 'Rainbow', min: 0, max: 1, step: 1, default: 1 } },
-    render(ctx, w, h, params, t) {
+    params: { speed: { label: 'Speed', min: 0.1, max: 5, step: 0.1, default: 0.8 }, scale: { label: 'Scale', min: 1, max: 20, step: 0.5, default: 8 }, hue: { label: 'Hue', min: 0, max: 360, step: 1, default: 0 }, rainbow: { label: 'Rainbow', min: 0, max: 1, step: 1, default: 1 }, global: { label: 'Global', min: 0, max: 1, step: 1, default: 0 } },
+    render(ctx, w, h, params, t, surfaceId, corners) {
       const res = 96;
       const img = ctx.createImageData(res, res);
       const d = img.data;
-      const sc = (params.scale ?? 8) / res;
+      const isGlobal = (params.global ?? 0) > 0.5;
+      const GS = 512;
+      const sc = (params.scale ?? 8) / (isGlobal ? GS : res);
       const sp = params.speed ?? 0.8;
       const baseHue = params.hue ?? 0;
       const rainbow = (params.rainbow ?? 1) > 0.5;
-      for (let y = 0; y < res; y++) {
-        for (let x = 0; x < res; x++) {
+      for (let py = 0; py < res; py++) {
+        for (let px = 0; px < res; px++) {
+          let x, y;
+          if (isGlobal && corners) {
+            const u = px / res, v = py / res;
+            x = (corners[0].x*(1-u)*(1-v) + corners[1].x*u*(1-v) + corners[3].x*(1-u)*v + corners[2].x*u*v) * GS;
+            y = (corners[0].y*(1-u)*(1-v) + corners[1].y*u*(1-v) + corners[3].y*(1-u)*v + corners[2].y*u*v) * GS;
+          } else {
+            x = px; y = py;
+          }
           const n = Math.sin(x*sc*3.7 + t*sp) * Math.cos(y*sc*2.9 + t*sp*0.6) +
                     Math.sin((x+y)*sc*1.5 + t*sp*1.4) * 0.5;
-          const v = (n + 1.5) / 3;
-          const hue = rainbow ? ((baseHue + v * 360 + t * 30 * sp) % 360) : baseHue;
-          const [r, g, b] = hslToRgb(hue/360, 0.85, 0.3 + v * 0.45);
-          const i = (y * res + x) * 4;
+          const val = (n + 1.5) / 3;
+          const hue = rainbow ? ((baseHue + val * 360 + t * 30 * sp) % 360) : baseHue;
+          const [r, g, b] = hslToRgb(hue/360, 0.85, 0.3 + val * 0.45);
+          const i = (py * res + px) * 4;
           d[i] = r*255; d[i+1] = g*255; d[i+2] = b*255; d[i+3] = 255;
         }
       }
@@ -207,7 +230,7 @@ export const EFFECTS = {
     params: {
       cols:      { label: 'Columns',   min: 1, max: 32, step: 1,   default: 8 },
       rows:      { label: 'Rows',      min: 1, max: 32, step: 1,   default: 8 },
-      lineWidth: { label: 'Line Width', min: 1, max: 10, step: 0.5, default: 2 },
+      lineWidth: { label: 'Line Width', min: 1, max: 10, step: 0.5, default: 3 },
       opacity:   { label: 'Opacity',   min: 0.1, max: 1, step: 0.05, default: 1 },
     },
     render(ctx, w, h, params) {
@@ -232,11 +255,7 @@ export const EFFECTS = {
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
       }
 
-      // Diagonal cross through center for quick centering reference
-      ctx.strokeStyle = `rgba(255,80,80,${op * 0.6})`;
-      ctx.lineWidth = Math.max(1, lw * 0.6);
-      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(w, h); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(w, 0); ctx.lineTo(0, h); ctx.stroke();
+
     }
   },
 
@@ -761,8 +780,12 @@ function quadPixelDims(corners, outW, outH) {
 
 // Render any content type to an offscreen canvas and return it
 // outW/outH: the configured output resolution, used to compute correct canvas size for cover mode
-export function renderContent(surface, t, outW = 1920, outH = 1080) {
-  const { id, content, corners } = surface;
+// groupOverride: if set, use the group's effect+params (with global mode forced on)
+export function renderContent(surface, t, outW = 1920, outH = 1080, groupOverride = null) {
+  const { id, corners } = surface;
+  const content = (groupOverride && surface.content.type === 'effect')
+    ? { ...surface.content, effect: groupOverride.effect, params: { ...groupOverride.params, global: 1 } }
+    : surface.content;
 
   // For cover mode, size the canvas to match the quad's screen aspect ratio
   // so the image is never double-distorted (once to fill the canvas, once to fill the quad)
@@ -835,7 +858,7 @@ export function renderContent(surface, t, outW = 1920, outH = 1080) {
       const effectKey = content.effect ?? 'plasma';
       const effect = EFFECTS[effectKey];
       if (effect) {
-        effect.render(ctx, W, H, content.params ?? {}, t, id);
+        effect.render(ctx, W, H, content.params ?? {}, t, id, surface.corners);
       }
       break;
     }
